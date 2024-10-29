@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=2 python test.py --camera realsense --dump_dir "/data2/gaoyuming/mutiview_graspness/graspness_depthguji/logs/1022_re_quan_depth" --checkpoint_path "/data2/gaoyuming/mutiview_graspness/graspness_depthguji/output/train_nu1_re_1007/minkuresunet_epoch97.tar" --batch_size 1 --dataset_root  "/data2/gaoyuming/.cache/datasets/dataset-data/" --infer 

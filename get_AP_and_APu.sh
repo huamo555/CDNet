@@ -1,0 +1,1 @@
+python get_AP_and_APu.py --file_path "/data3/gaoyuming/project/graspness_不加任何东西/graspness_yuan/logs/0627_re_yuan/ap_realsense.npy"
