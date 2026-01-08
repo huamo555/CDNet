@@ -48,3 +48,5 @@ class DenseBlock(nn.Module):
             if i != self.L - 1:
                 hs.append(h)
         return h
+
+

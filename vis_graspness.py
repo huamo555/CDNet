@@ -10,14 +10,14 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 from data_utils import get_workspace_mask, CameraInfo, create_point_cloud_from_depth_image
 
-data_path = "/data2/gaoyuming/.cache/datasets/dataset-data/"
-scene_id = 'scene_0019'
+data_path = "/data3/gaoyuming/project/datasets/datasets/dataset-data/"
+scene_id = 'scene_0164'
 ann_id = '0000'
 camera_type = 'realsense'
-color = np.array(Image.open(os.path.join(data_path, 'scenes', scene_id, camera_type, 'rgb', ann_id + '.png')), dtype=np.float32) / 255.0
+color = np.array(Image.open(os.path.join(data_path, 'scenes', scene_id, camera_type, 'rgb', ann_id + '.png')), dtype=np.float32) /255
 # depth = np.array(Image.open(os.path.join(data_path, 'scenes', scene_id, camera_type, 'depth', ann_id + '.png')))
 # depth = np.array(Image.open(os.path.join(data_path, 'depth_dan', scene_id, camera_type, ann_id + '.png')))
-depth = np.array(Image.open("/data2/gaoyuming/mutiview_graspness/graspness_depthguji/logs/1015_re_quan_depth/scene_0019/realsense/depth/0000.png"))
+depth = np.array(Image.open("/data3/gaoyuming/Graspgan_quan/depthguji_quan_huigui_512/logs/0703_re_512_test/scene_0164/realsense/depth/0000.png"))
 seg = np.array(Image.open(os.path.join(data_path, 'scenes', scene_id, camera_type, 'label', ann_id + '.png')))
 meta = scio.loadmat(os.path.join(data_path, 'scenes', scene_id, camera_type, 'meta', ann_id + '.mat'))
 intrinsic = meta['intrinsic_matrix']
@@ -33,11 +33,10 @@ workspace_mask = get_workspace_mask(point_cloud, seg, trans=trans, organized=Tru
 
 color = color 
 
-mask = (depth_mask & workspace_mask)
+mask = (depth_mask)
 point_cloud = point_cloud[mask]
 color = color[mask]
 seg = seg[mask]
-color = color
 
 """ graspness_full = np.load(os.path.join(data_path, 'graspness_label', scene_id, camera_type, ann_id + '.npy')).squeeze()
 graspness_full[seg == 0] = 0.
@@ -49,7 +48,7 @@ cloud = o3d.geometry.PointCloud()
 cloud.points = o3d.utility.Vector3dVector(point_cloud.astype(np.float32))
 cloud.colors = o3d.utility.Vector3dVector(color.astype(np.float32))
 
-o3d.io.write_point_cloud("/data2/gaoyuming/mutiview_graspness/graspness_depthguji/view/dan0019.pcd", cloud) 
+o3d.io.write_point_cloud("/data3/gaoyuming/Graspgan_quan/depthguji_quan_huigui_512/view/quan_0164.pcd", cloud) 
 
 
 

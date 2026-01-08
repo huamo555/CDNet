@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=2 python generate_graspness.py --dataset_root "/data2/gaoyuming/.cache/datasets/dataset-data/" --camera realsense
+CUDA_VISIBLE_DEVICES=0 python generate_graspness.py --dataset_root "/data3/gaoyuming/project/datasets/datasets/dataset-data/" --camera_type realsense

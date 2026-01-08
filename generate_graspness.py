@@ -22,13 +22,13 @@ if __name__ == '__main__':
     cfgs = parser.parse_args() # parser.parse_args()将命令行参数进行解析，将解析结果保存在cfgs变量中
     dataset_root = cfgs.dataset_root   # set dataset root
     camera_type = cfgs.camera_type   # kinect / realsense
-    save_path_root = os.path.join(dataset_root, 'graspness_1023_quan') # 设置保存路径的根目录。
+    save_path_root = os.path.join(dataset_root, 'graspness_0704_quan') # 设置保存路径的根目录。
 
     num_views, num_angles, num_depths = 300, 12, 4 # 三个变量num_views、num_angles和num_depths，分别赋值为300、12和4，用于设置视角数量、角度数量和深度数量。
     fric_coef_thresh = 0.8 # 设置摩擦系数的阈值
     point_grasp_num = num_views * num_angles * num_depths # 将num_views、num_angles和num_depths相乘，计算出point_grasp_num，表示每个点的抓取标签的数量
     for scene_id in range(100):
-        scene_id = scene_id 
+        scene_id = scene_id +80
         save_path = os.path.join(save_path_root, 'scene_' + str(scene_id).zfill(4), camera_type)
         if not os.path.exists(save_path): # 检查是否存在save_path目录，如果不存在则使用os.makedirs()函数创建该目录
             os.makedirs(save_path)
@@ -45,12 +45,8 @@ if __name__ == '__main__':
             # 这段代码用于生成场景，并获取场景相关的深度图、分割图、元数据和点云数据
             print('generating scene: {} ann: {}'.format(scene_id, ann_id))
             # Image.open()函数打开深度图像文件，将打开的图像文件转换为NumPy数组，并将其存储在depth变量中
-            # depth = np.array(Image.open(os.path.join(dataset_root, 'scenes', 'scene_' + str(scene_id).zfill(4),
-            #                                          camera_type, 'depth', str(ann_id).zfill(4) + '.png')))
-            
-            depth = np.array(Image.open(os.path.join("/data2/gaoyuming/mutiview_graspness/graspness_depthguji/logs/1022_re_quan_depth/", 'scene_' + str(scene_id).zfill(4),
-                                                      camera_type, 'depth', str(ann_id).zfill(4) + '.png')))
-
+            depth = np.array(Image.open(os.path.join("/data3/gaoyuming/Graspgan_quan/depthguji_quan_huigui_512/logs/0703_re_512_test/",  'scene_' + str(scene_id).zfill(4),
+                                                     camera_type, 'depth', str(ann_id).zfill(4) + '.png')))
             # Image.open()函数打开分割图像文件，将打开的图像文件转换为NumPy数组，并将其存储在seg变量中
             seg = np.array(Image.open(os.path.join(dataset_root, 'scenes', 'scene_' + str(scene_id).zfill(4),
                                                    camera_type, 'label', str(ann_id).zfill(4) + '.png')))

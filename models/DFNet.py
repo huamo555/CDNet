@@ -8,242 +8,289 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .dense import DenseBlock
 from .duc import DenseUpsamplingConvolution
+from .MobileNetV3 import InvertedResidualConfig, InvertedResidual
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def conv_bn_relu(ch_in, ch_out, kernel, stride=1, padding=0, bn=True,
+                 relu=True):
+    assert (kernel % 2) == 1, \
+        'only odd kernel is supported but kernel = {}'.format(kernel)
+
+    layers = []
+    layers.append(nn.Conv2d(ch_in, ch_out, kernel, stride, padding,
+                            bias=not bn))
+    if bn:
+        layers.append(nn.BatchNorm2d(ch_out))
+    if relu:
+        layers.append(nn.ReLU(inplace=True))
+
+    layers = nn.Sequential(*layers)
+
+    return layers
+
+
+def convt_bn_relu(ch_in, ch_out, kernel, stride=1, padding=0, output_padding=0,
+                  bn=True, relu=True):
+    layers = []
+    layers.append(nn.ConvTranspose2d(ch_in, ch_out, kernel, stride, padding,
+                                     output_padding, bias=not bn))
+    if bn:
+        layers.append(nn.BatchNorm2d(ch_out))
+    if relu:
+        layers.append(nn.ReLU(inplace=True))
+
+    layers = nn.Sequential(*layers)
+
+    return layers
 
 class DFNet(nn.Module):
-    """
-    Depth Filler Network (DFNet).
-    """
-    def __init__(self, in_channels = 4, hidden_channels = 16, L = 5, k = 12, use_DUC = True, **kwargs):
+    def __init__(self, in_channels=4, hidden_channels=16, L=5, k=12, use_DUC=True, **kwargs):
         super(DFNet, self).__init__()
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.L = L
         self.k = k
         self.use_DUC = use_DUC
-        # First
+
+        # 初始化所有层
+        self.ff = nn.Sequential(
+            nn.Conv2d(68, self.hidden_channels, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(self.hidden_channels),
+            nn.ReLU(True)
+        ).to(device)
         self.first = nn.Sequential(
-            nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size = 3, stride = 2, padding = 1),
+            nn.Conv2d(self.in_channels, self.hidden_channels, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True)
-        )
-        # Dense1: skip
+        ).to(device)
         self.dense1s_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True)
-        )
-        self.dense1s = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense1s_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense1: normal
+        ).to(device)
+        
+        # 初始化 InvertedResidual 层 skip
+        cnf1 = InvertedResidualConfig(input_c=self.hidden_channels, kernel=3, expanded_c=self.hidden_channels, out_c=self.hidden_channels, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        norm_layer = nn.BatchNorm2d
+        self.block1 = InvertedResidual(cnf1, norm_layer).to(device)
+        
+        # 继续初始化其他层...
         self.dense1_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True)
-        )
-        self.dense1 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense1_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 2, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense2: skip
+        ).to(device)
+        cnf2 = InvertedResidualConfig(input_c=self.hidden_channels , kernel=3, expanded_c=self.hidden_channels, out_c=self.hidden_channels, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block2 = InvertedResidual(cnf2, norm_layer).to(device)
+        self.conv2 = nn.Conv2d(in_channels=self.hidden_channels, out_channels=self.hidden_channels * 2, kernel_size=3, stride=2, padding=1).to(device)
+        
         self.dense2s_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels * 2, self.hidden_channels * 2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels * 2),
             nn.ReLU(True)
-        )
-        self.dense2s = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense2s_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense2: normal
+        ).to(device)
+        cnf3 = InvertedResidualConfig(input_c=self.hidden_channels * 2, kernel=3, expanded_c=self.hidden_channels * 2, out_c=self.hidden_channels * 2, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block3 = InvertedResidual(cnf3, norm_layer).to(device)
+        
         self.dense2_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels* 2, self.hidden_channels* 2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 2),
             nn.ReLU(True)
-        )
-        self.dense2 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense2_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 2, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense3: skip
+        ).to(device)
+        cnf4 = InvertedResidualConfig(input_c=self.hidden_channels* 2, kernel=3, expanded_c=self.hidden_channels* 2, out_c=self.hidden_channels* 2, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block4 = InvertedResidual(cnf4, norm_layer).to(device)
+        self.conv4 = nn.Conv2d(in_channels=self.hidden_channels* 2, out_channels=self.hidden_channels * 4, kernel_size=3, stride=2, padding=1).to(device)
+        
         self.dense3s_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels* 4, self.hidden_channels* 4, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 4),
             nn.ReLU(True)
-        )
-        self.dense3s = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense3s_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense3: normal
+        ).to(device)
+        cnf5 = InvertedResidualConfig(input_c=self.hidden_channels* 4, kernel=3, expanded_c=self.hidden_channels* 4, out_c=self.hidden_channels* 4, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block5 = InvertedResidual(cnf5, norm_layer).to(device)
+        
         self.dense3_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels* 4, self.hidden_channels* 4, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 4),
             nn.ReLU(True)
-        )
-        self.dense3 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense3_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 2, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # Dense4
+        ).to(device)
+        cnf6 = InvertedResidualConfig(input_c=self.hidden_channels* 4, kernel=3, expanded_c=self.hidden_channels* 4, out_c=self.hidden_channels* 4, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block6 = InvertedResidual(cnf6, norm_layer).to(device)
+        self.conv6 = nn.Conv2d(in_channels=self.hidden_channels* 4, out_channels=self.hidden_channels * 8, kernel_size=3, stride=2, padding=1).to(device)
+        
         self.dense4_conv1 = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels* 8, self.hidden_channels* 8, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 8),
             nn.ReLU(True)
-        )
-        self.dense4 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.dense4_conv2 = nn.Sequential(
-            nn.Conv2d(self.k, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
-            nn.ReLU(True)
-        )
-        # DUC upsample 1
+        ).to(device)
+        cnf7 = InvertedResidualConfig(input_c=self.hidden_channels* 8, kernel=3, expanded_c=self.hidden_channels* 8, out_c=self.hidden_channels* 8, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.block7 = InvertedResidual(cnf7, norm_layer).to(device)
+        
         self.updense1_conv = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels* 8, self.hidden_channels* 8, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 8),
             nn.ReLU(True)
-        )
-        self.updense1 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.updense1_duc = self._make_upconv(self.k, self.hidden_channels, upscale_factor = 2)
-        # DUC upsample 2
+        ).to(device)
+        upcnf1 = InvertedResidualConfig(input_c=self.hidden_channels* 8, kernel=3, expanded_c=self.hidden_channels* 8, out_c=self.hidden_channels* 8, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.upblock1 = InvertedResidual(upcnf1, norm_layer).to(device)
+        self.upsample_block1 = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels=self.hidden_channels* 8,
+                out_channels=self.hidden_channels* 4,
+                kernel_size=2,
+                stride=2,
+                padding=0,
+                output_padding=0,
+                bias=False
+            ),
+            nn.BatchNorm2d(self.hidden_channels* 4),
+            nn.ReLU(True)
+        ).to(device)
+        
         self.updense2_conv = nn.Sequential(
-            nn.Conv2d(self.hidden_channels * 2, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
-            nn.BatchNorm2d(self.hidden_channels),
+            nn.Conv2d(self.hidden_channels * 8, self.hidden_channels* 4, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels * 4),
             nn.ReLU(True)
-        )
-        self.updense2 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.updense2_duc = self._make_upconv(self.k, self.hidden_channels, upscale_factor = 2)
-        # DUC upsample 3
+        ).to(device)
+        upcnf2 = InvertedResidualConfig(input_c=self.hidden_channels* 4, kernel=3, expanded_c=self.hidden_channels* 4, out_c=self.hidden_channels* 4, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.upblock2 = InvertedResidual(upcnf2, norm_layer).to(device)
+        self.upsample_block2 = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels=self.hidden_channels* 4,
+                out_channels=self.hidden_channels* 2,
+                kernel_size=2,
+                stride=2,
+                padding=0,
+                output_padding=0,
+                bias=False
+            ),
+            nn.BatchNorm2d(self.hidden_channels* 2),
+            nn.ReLU(True)
+        ).to(device)
+        
         self.updense3_conv = nn.Sequential(
-            nn.Conv2d(self.hidden_channels * 2 , self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.Conv2d(self.hidden_channels * 4, self.hidden_channels* 2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.hidden_channels* 2),
+            nn.ReLU(True)
+        ).to(device)
+        upcnf3 = InvertedResidualConfig(input_c=self.hidden_channels* 2, kernel=3, expanded_c=self.hidden_channels* 2, out_c=self.hidden_channels* 2, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.upblock3 = InvertedResidual(upcnf3, norm_layer).to(device)
+        self.upsample_block3 = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels=self.hidden_channels* 2,
+                out_channels=self.hidden_channels,
+                kernel_size=2,
+                stride=2,
+                padding=0,
+                output_padding=0,
+                bias=False
+            ),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True)
-        )
-        self.updense3 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.updense3_duc = self._make_upconv(self.k, self.hidden_channels, upscale_factor = 2)
-        # DUC upsample 4
+        ).to(device)
+        
         self.updense4_conv = nn.Sequential(
-            nn.Conv2d(self.hidden_channels * 2, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.Conv2d(self.hidden_channels * 2, self.hidden_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True)
-        )
-        self.updense4 = DenseBlock(self.hidden_channels, self.L, self.k, with_bn = True)
-        self.updense4_duc = self._make_upconv(self.k, self.hidden_channels, upscale_factor = 2)
-        # Final
-        self.final = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+        ).to(device)
+        upcnf4 = InvertedResidualConfig(input_c=self.hidden_channels, kernel=3, expanded_c=self.hidden_channels, out_c=self.hidden_channels, use_se=False, activation="RE", stride=1, width_multi=1.0)
+        self.upblock4 = InvertedResidual(upcnf4, norm_layer).to(device)
+        self.upsample_block4 = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels=self.hidden_channels,
+                out_channels=self.hidden_channels,
+                kernel_size=2,
+                stride=2,
+                padding=0,
+                output_padding=0,
+                bias=False
+            ),
+            nn.BatchNorm2d(self.hidden_channels),
+            nn.ReLU(True)
+        ).to(device)
+        
+        self.final =nn.Sequential(
+            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True),
-            nn.Conv2d(self.hidden_channels, 900, kernel_size = 1, stride = 1)
-        )
+            nn.Conv2d(self.hidden_channels, 800, kernel_size=1, stride=1)
+        ).to(device)
         self.obj_mask = nn.Sequential(
-            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size = 3, stride = 1, padding = 1),
+            nn.Conv2d(self.hidden_channels, self.hidden_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(self.hidden_channels),
             nn.ReLU(True),
-            nn.Conv2d(self.hidden_channels, 2, kernel_size = 1, stride = 1)
-        )
-    
-    def _make_upconv(self, in_channels, out_channels, upscale_factor = 2):
-        if self.use_DUC:
-            return DenseUpsamplingConvolution(in_channels, out_channels, upscale_factor = upscale_factor)
-        else:
-            return nn.Sequential(
-                nn.ConvTranspose2d(in_channels, out_channels, kernel_size = upscale_factor, stride = upscale_factor, padding = 0, output_padding = 0),
-                nn.BatchNorm2d(out_channels),
-                nn.ReLU(True)
-            )
-    
+            nn.Conv2d(self.hidden_channels, 2, kernel_size=1, stride=1)
+        ).to(device)
+
     def forward(self, rgb, depth):
-        # 720 x 1280 (rgb, depth) -> 360 x 640 (h)
         n, h, w = depth.shape
         depth = depth.view(n, 1, h, w)
+
         rgb = rgb.float()
         depth = depth.float()
-        h = self.first(torch.cat((rgb, depth), dim = 1))
-
-        # dense1: 360 x 640 (h, depth1) -> 180 x 320 (h, depth2)
-        depth1 = F.interpolate(depth, scale_factor = 0.5, mode = "nearest")
+        h = self.first(torch.cat((rgb, depth), dim=1))
+        
         # dense1: skip
-        h_d1s = self.dense1s_conv1(h)
-        h_d1s = self.dense1s(torch.cat((h_d1s, depth1), dim = 1))
-        h_d1s = self.dense1s_conv2(h_d1s)
+        h_d1s = self.dense1s_conv1(h) #  [1, 64, 360, 640]
+        h_d1s = self.block1(h_d1s)
+        
         # dense1: normal
-        h = self.dense1_conv1(h)
-        h = self.dense1(torch.cat((h, depth1), dim = 1))
-        h = self.dense1_conv2(h)
-
-        # dense2: 180 x 320 (h, depth2) -> 90 x 160 (h, depth3)
-        depth2 = F.interpolate(depth1, scale_factor = 0.5, mode = "nearest")
+        h = self.dense1_conv1(h)  #  [1, 64, 360, 640]
+        h = self.block2(h)
+        h = self.conv2(h)         #  [1, 128, 180, 360]
+        
         # dense2: skip
-        h_d2s = self.dense2s_conv1(h)
-        h_d2s = self.dense2s(torch.cat((h_d2s, depth2), dim = 1))
-        h_d2s = self.dense2s_conv2(h_d2s)
+        h_d2s = self.dense2s_conv1(h)  
+        h_d2s = self.block3(h_d2s)
+        
         # dense2: normal
         h = self.dense2_conv1(h)
-        h = self.dense2(torch.cat((h, depth2), dim = 1))
-        h = self.dense2_conv2(h)
+        h = self.block4(h)
+        h = self.conv4(h)
         
-        # dense3: 90 x 160 (h, depth3) -> 45 x 80 (h, depth4)
-        depth3 = F.interpolate(depth2, scale_factor = 0.5, mode = "nearest")
         # dense3: skip
         h_d3s = self.dense3s_conv1(h)
-        h_d3s = self.dense3s(torch.cat((h_d3s, depth3), dim = 1))
-        h_d3s = self.dense3s_conv2(h_d3s)
+        h_d3s = self.block5(h_d3s)
+        
         # dense3: normal
         h = self.dense3_conv1(h)
-        h = self.dense3(torch.cat((h, depth3), dim = 1))
-        h = self.dense3_conv2(h)
-
-        # dense4: 45 x 80
-        depth4 = F.interpolate(depth3, scale_factor = 0.5, mode = "nearest")
+        h = self.block6(h)
+        h = self.conv6(h)
+        
+        # dense4
         h = self.dense4_conv1(h)
-        h = self.dense4(torch.cat((h, depth4), dim = 1))
-        h = self.dense4_conv2(h)
-
-        # updense1: 45 x 80 -> 90 x 160
+        h = self.block7(h)
+        
+        # updense1
         h = self.updense1_conv(h)
-        h = self.updense1(torch.cat((h, depth4), dim = 1))
-        h = self.updense1_duc(h) 
-
-        # updense2: 90 x 160 -> 180 x 320
-        h = torch.cat((h, h_d3s), dim = 1)
+        h = self.upblock1(h)
+        h = self.upsample_block1(h)
+        
+        # updense2
+        h = torch.cat((h, h_d3s), dim=1)
         h = self.updense2_conv(h)
-        h = self.updense2(torch.cat((h, depth3), dim = 1))
-        h = self.updense2_duc(h)
-
-        # updense3: 180 x 320 -> 360 x 640
-        h = torch.cat((h, h_d2s), dim = 1)
+        h = self.upblock2(h)
+        h = self.upsample_block2(h)
+        
+        # updense3
+        h = torch.cat((h, h_d2s), dim=1)
         h = self.updense3_conv(h)
-        h = self.updense3(torch.cat((h, depth2), dim = 1))
-        h = self.updense3_duc(h)
-
-        # updense4: 360 x 640 -> 720 x 1280
-        h = torch.cat((h, h_d1s), dim = 1)
+        h = self.upblock3(h)
+        h = self.upsample_block3(h)
+        
+        # updense4
+        h = torch.cat((h, h_d1s), dim=1)
         h = self.updense4_conv(h)
-        h = self.updense4(torch.cat((h, depth1), dim = 1))
-        h = self.updense4_duc(h)
-
+        h = self.upblock4(h)
+        h = self.upsample_block4(h)
+        
         # final
         w = self.final(h)
-
         obj = self.obj_mask(h)
 
-        # return rearrange(h, 'n 1 h w -> n h w')
-        
-        return w , obj
+        return w, obj
 
-
+# 将模型移到设备上
+model = DFNet().to(device)

@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 import argparse
 
+#from config import args as args_config
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -21,6 +22,8 @@ from loss_novel import get_loss_novel
 from loss_novel_new import get_loss_novel_new
 from graspnet_dataset import GraspNetDataset
 from models.DFNet import DFNet
+import time
+# from src.model.completionformer import CompletionFormer
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', default=None, required=True)
@@ -32,10 +35,30 @@ parser.add_argument('--num_point', type=int, default=19998, help='Point Number [
 parser.add_argument('--seed_feat_dim', default=512, type=int, help='Point wise feature dim')
 parser.add_argument('--voxel_size', type=float, default=0.005, help='Voxel Size to process point clouds ')
 parser.add_argument('--max_epoch', type=int, default=100, help='Epoch to run [default: 18]')
-parser.add_argument('--batch_size', type=int, default=1, help='Batch Size during training [default: 2]')
+parser.add_argument('--batch_size', type=int, default=8, help='Batch Size during training [default: 2]')
 parser.add_argument('--learning_rate', type=float, default=0.001, help='Initial learning rate [default: 0.001]')
 parser.add_argument('--resume', action='store_true', default=True, help='Whether to resume from checkpoint')
 cfgs = parser.parse_args()
+
+
+def check_args(args):
+    new_args = args
+    if args.pretrain is not None:
+        assert os.path.exists(args.pretrain), \
+            "file not found: {}".format(args.pretrain)
+
+        if args.resume:
+            checkpoint = torch.load(args.pretrain)
+
+            new_args = checkpoint['args']
+            new_args.test_only = args.test_only
+            new_args.pretrain = args.pretrain
+            new_args.dir_data = args.dir_data
+            new_args.resume = args.resume
+
+    return new_args
+
+
 # ------------------------------------------------------------------------- GLOBAL CONFIG BEG
 EPOCH_CNT = 0
 # 判断cfgs.log_dir是否存在，如果不存在则创建该目录。cfgs.log_dir是用于存储训练过程中的日志文件的目录
@@ -73,9 +96,11 @@ print('train dataloader length: ', len(TRAIN_DATALOADER))
 
 
 # 网络是GraspNet，并将数据移动至 cuda：0
-net_DF = DFNet(in_channels = 4, hidden_channels = 16)
-
+net_DF = DFNet(in_channels = 4, hidden_channels = 32)
+# args_main = check_args(args_config)
+# net = CompletionFormer(args_main)
 ##############################################################################
+from torchsummary import summary
 # print(summary(net_DF, (1, 224, 224)))
 
 
@@ -94,6 +119,7 @@ if CHECKPOINT_PATH is not None and os.path.isfile(CHECKPOINT_PATH):
     checkpoint = torch.load(CHECKPOINT_PATH)
     # 加载模型参数model_state_dict，和优化器参数optimizer_state_dict
     net_DF.load_state_dict(checkpoint['model_state_dict'])
+    #net.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch'] #表示从该轮开始继续训练。
     # 使用SummaryWriter创建一个名为TRAIN_WRITER的TensorBoard可视化对象，用于记录训练过程中的指标和可视化结果
@@ -113,28 +139,16 @@ def adjust_learning_rate(optimizer, epoch):
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
-mask0_1 = np.zeros((720, 1280), dtype=int)
-
-# 填充掩码
-for i in range(720):
-    for j in range(1280):
-        # 使用按位异或操作来交替填充1和0
-        mask0_1[i, j] = (i ^ j) & 1
-
-mask0_1 = torch.tensor(mask0_1)
-mask0_1 = mask0_1.to(device)
-print(mask0_1.device)
-mask_inverted = 1 -mask0_1
-mask0_1 = mask0_1.unsqueeze(0)
-
 
 def train_one_epoch():
     stat_dict = {}  # collect statistics
     # 调用adjust_learning_rate(optimizer, EPOCH_CNT)函数，根据当前轮数EPOCH_CNT调整优化器optimizer的学习率
     adjust_learning_rate(optimizer, EPOCH_CNT)
     net_DF.train()
+    # net.train()
 
     batch_interval = 20
+    
     # 对于每个批次的数据和标签，将其移动到设备（如GPU）上进行计算，以便利用硬件加速
     for batch_idx, batch_data_label in enumerate(TRAIN_DATALOADER):
         for key in batch_data_label:
@@ -147,18 +161,25 @@ def train_one_epoch():
         # 模型net对批次数据进行前向传播，得到输出end_points
         # mask = batch_data_label["yuan_zero_mask_TRAIN"] == 1  # (2, 720, 1280)
         # mask = batch_data_label["loss_mask"] == 1 
-        mask = mask0_1 & (batch_data_label["loss_mask"] == 1) & (batch_data_label["yuan_zero_mask_TRAIN"] == 1)
-        print(mask.sum())
+        mask = (batch_data_label["loss_mask"] == 1) & (batch_data_label["yuan_zero_mask_TRAIN"] == 1)& (batch_data_label["objectness_label"] == 1)
         batch_data_label['rgb'] = batch_data_label['rgb'].permute(0, 3, 1, 2)   # torch.Size([2, 720, 1280, 3]) -> torch.Size([2, 3, 720, 1280])
         # zero_depth = torch.zeros_like(batch_data_label['depth'])
+        torch.cuda.synchronize()
+        start_time = time.time()
         res, obj = net_DF(batch_data_label['rgb'], batch_data_label['depth'])
+        torch.cuda.synchronize()
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(elapsed_time)
+        
         # res = net_DF(batch_data_label['rgb'], batch_data_label['depth'])
+
+        # res, obj = net(batch_data_label['rgb'], batch_data_label['depth'])
         batch_data_label['pred'] = res  # torch.Size([2, 1000, 720, 1280])
         batch_data_label['objectness_score'] = obj
-
         loss, end_points = get_loss(batch_data_label, mask)
 
-        print("本次实验，点云补全，re相机.1026")
+        print("本次实验，点云quan，kn相机.0606,DFNET128")
         print(loss)
         optimizer.zero_grad()
         loss.backward()

@@ -2,11 +2,10 @@ import os
 import sys
 import numpy as np
 import argparse
-import time
 import torch
 from torch.utils.data import DataLoader
-from graspnetAPI.graspnet_eval import GraspGroup, GraspNetEval
 from PIL import Image
+import time
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(ROOT_DIR, 'pointnet2'))
@@ -15,9 +14,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'models'))
 sys.path.append(os.path.join(ROOT_DIR, 'dataset'))
 
 from models.DFNet import DFNet
-from graspnet import GraspNet, pred_decode
 from graspnet_dataset import GraspNetDataset
-from collision_detector import ModelFreeCollisionDetector
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset_root', default=None, required=True)
@@ -46,16 +43,24 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 mask0_1 = np.zeros((720, 1280), dtype=int)
 
 # 填充掩码
-for i in range(720):
-    for j in range(1280):
-        # 使用按位异或操作来交替填充1和0
-        mask0_1[i, j] = (i ^ j) & 1
+# for i in range(720):
+#     for j in range(1280):
+#         # 使用按位异或操作来交替填充1和0
+#         mask0_1[i, j] = (i ^ j) & 1
 
+# mask0_1 = torch.tensor(mask0_1)
+# mask0_1 = mask0_1.to(device)
+# print(mask0_1.device)
+# mask0_1 = mask0_1.unsqueeze(0)
+# mask_inverted = 1 - mask0_1
+
+mask0_1 = np.random.choice([0, 1], size=(720, 1280), p=[0.5, 0.5])
 mask0_1 = torch.tensor(mask0_1)
 mask0_1 = mask0_1.to(device)
 print(mask0_1.device)
+
+mask_inverted = 1 -mask0_1
 mask0_1 = mask0_1.unsqueeze(0)
-mask_inverted = 1 - mask0_1
 
 def inference():
     # 创建了一个名为test_dataset的数据集对象，用于在GraspNet数据集上进行测试
@@ -71,7 +76,7 @@ def inference():
                                  num_workers=0, worker_init_fn=my_worker_init_fn)
     print('Test dataloader length: ', len(test_dataloader))
     # Init the model 初始化模型（net）并将其移动到可用的设备（GPU或CPU）上
-    net_DF = DFNet()
+    net_DF =  DFNet(in_channels = 4, hidden_channels = 64)
     net_DF.to(device)
 
     # Load checkpoint 加载预训练的模型参数（checkpoint）
@@ -97,21 +102,39 @@ def inference():
                 batch_data[key] = batch_data[key].to(device)
 
         # Forward pass
+        start_time = time.time()
         with torch.no_grad():
-            mask = mask0_1 & (batch_data["yuan_zero_mask_TRAIN"] == 1) & (batch_data["objectness_label"] == 1)
+            mask = (batch_data["yuan_zero_mask_TRAIN"] == 1) & (batch_data["objectness_label"] == 1) & (mask0_1== 1)
+            mask_i = (batch_data["yuan_zero_mask_TRAIN"] == 1) & (batch_data["objectness_label"] == 1) & (mask0_1== 0)
             batch_data['rgb'] = batch_data['rgb'].permute(0, 3, 1, 2)   # torch.Size([2, 720, 1280, 3]) -> torch.Size([2, 3, 720, 1280])
             # zero_depth = torch.zeros_like(batch_data_label['depth'])
             res, obj = net_DF(batch_data['rgb'], batch_data['depth'])
+            
+            elapsed_time = time.time() - start_time
+            print(elapsed_time)
+            fps = 1/elapsed_time
+            print(fps)
+            
             _, predicted_class_indices = torch.max(res, dim=1)
             
-            final = predicted_class_indices 
-            final_depth = final * mask 
-
-            mask_yuan = mask_inverted & (batch_data["yuan_zero_mask_TRAIN"] == 1) & (batch_data["objectness_label"] == 1)
-
             no_objmask = (batch_data["objectness_label"] == 0)
+            objmask = batch_data["objectness_label"] == 1
+            final_depth = predicted_class_indices 
 
-            final_depth = final_depth + mask_yuan * batch_data["depth"] + no_objmask * batch_data["depth"]
+            final_depth = final_depth * mask + batch_data['depth'] * mask_i  + no_objmask * batch_data["depth"]
+            
+            # final_depth = final_depth * objmask + no_objmask * batch_data["depth"]
+            
+            ## final_depth = final_depth  * objmask
+            ## depth_yuan = batch_data["depth"]
+            ## depth_yuan = depth_yuan * objmask
+            
+            ## diff = torch.abs(final_depth - depth_yuan)
+
+            # 根据条件选择保留 final_depth 或 batch_depth 的值
+            ## result = torch.where(diff > 5, final_depth, 0)
+            
+            ## final_depth = result
 
             print("11")
             final_depth = final_depth.cpu()
@@ -123,7 +146,6 @@ def inference():
             depth_map_uint8 = reconstructed_depth.astype(np.int32)
             depth_image = Image.fromarray(depth_map_uint8, 'I')
             print(depth_image)
-
         # Dump results for evaluation
         # 对每个样本进行处理。将抓取预测结果转换为NumPy数组，并创建一个GraspGroup对象（gg）来表示抓取
         for i in range(cfgs.batch_size):

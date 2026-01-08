@@ -112,38 +112,36 @@ class GraspNetDataset(Dataset):
         rgb = np.array(Image.open(self.rgbpath[index]))
         real_depth_clean = np.array(Image.open(self.real_depthpath_clean[index]))  # my
         depth = np.array(Image.open(self.depthpath[index]))  # src
+
+        label = np.array(Image.open(self.labelpath[index]))
+
+        neg_zero_mask = np.where(real_depth_clean == 0, 0, 1).astype(np.uint8)
+        yuan_zero_mask_TRAIN = np.where(depth == 0, 0, 1).astype(np.uint8)
+        yuan_zero_mask_TEST= np.where(depth == 0, 1, 0).astype(np.uint8)
+        label_mask = np.where(label != 0, 1, 0).astype(np.uint8)
+
         seg = np.array(Image.open(self.labelpath[index]))
         objectness_label = seg.copy()
 
         objectness_label[objectness_label > 1] = 1
 
-        neg_zero_mask = np.where(real_depth_clean == 0, 0, 1).astype(np.uint8)
-        yuan_zero_mask_TRAIN = np.where(depth == 0, 0, 1).astype(np.uint8)
-        yuan_zero_mask_TEST= np.where(depth == 0, 1, 0).astype(np.uint8)
-        # label_mask = np.where(label != 0, 1, 0).astype(np.uint8)
+        if (depth > 599).any():  # 检查是否有元素大于 999
+            depth[depth > 599] = 599
 
-        if (depth > 899).any():  # 检查是否有元素大于 999
-            depth[depth > 899] = 899
+        if (real_depth_clean > 599).any():  # 检查是否有元素大于 999
+            real_depth_clean[real_depth_clean > 599] = 599
 
-        # if (real_depth_clean > 899).any():  # 检查是否有元素大于 999
-            # real_depth_clean[real_depth_clean > 899] = 899
-            
-        # real_depth_min = real_depth_clean.min()
-        # real_depth_max = real_depth_clean.max() 
-
-        num_classes = 900
-        # depth_class_labels = ((real_depth_clean / 900) * (num_classes))
+        depth_class_labels = real_depth_clean 
 
         ret_dict = {
                     'depth': depth.astype(np.int64),
                     'real_depth': real_depth_clean.astype(np.int64),
+                    'real_depth_clean': real_depth_clean.astype(np.int64),
                     'rgb': rgb.astype(np.int64),
                     'loss_mask': neg_zero_mask.astype(np.int64),
                     'yuan_zero_mask_TRAIN': yuan_zero_mask_TRAIN.astype(np.int64),
                     'yuan_zero_mask_TEST': yuan_zero_mask_TEST.astype(np.int64),
-                    # 'depth_min': real_depth_min.astype(np.int64),
-                    # 'depth_max': real_depth_max.astype(np.int64),
-                    # 'depth_class_labels': depth_class_labels.astype(np.int64),
+                    'depth_class_labels': depth_class_labels.astype(np.int64),
                     'objectness_label': objectness_label.astype(np.int64),
                     }
         return ret_dict
